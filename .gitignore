@@ -1,0 +1,8 @@
+# Streamlit secrets: holds the EmailBison API key, never commit
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

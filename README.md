@@ -7,7 +7,7 @@ Streamlit dashboard showing live campaign stats from the EmailBison API:
 - Reply rate by campaign
 - Campaign table with health flags and suggested fixes, downloadable as CSV
 - Recent interested leads
-- Campaign filter and date range
+- Campaign filter and a Quick range dropdown (Last 7/14/30/90 days, All time, or Custom start and end dates)
 
 Styled with the Orcus GTM brand (light theme, Inter, purple `#875AF2` accent) via
 `.streamlit/config.toml` and CSS in `app.py`. Streamlit's toolbar, menu, header and footer are hidden.

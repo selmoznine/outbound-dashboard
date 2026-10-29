@@ -28,6 +28,18 @@ MIN_REPLY_RATE = 0.01
 FIX_HIGH_BOUNCE = "Re-verify the list; drop invalid and catch-all emails."
 FIX_LOW_REPLY = "Tighten the ICP and rewrite the opener/offer."
 
+# Date range presets: label -> number of days (inclusive of today). None = special case.
+QUICK_RANGES = {
+    "Last 7 days": 7,
+    "Last 14 days": 14,
+    "Last 30 days": 30,
+    "Last 90 days": 90,
+    "All time": None,
+    "Custom": None,
+}
+DEFAULT_QUICK_RANGE = "Last 30 days"
+ALL_TIME_FALLBACK_DAYS = 365 * 5  # used if no campaign reports a created_at
+
 # Recent interested leads: how many reply pages to scan, and how many rows to show.
 MAX_REPLY_PAGES = 20
 RECENT_LEADS_LIMIT = 25
@@ -140,10 +152,13 @@ def fetch_campaigns(api_key: str, base_url: str) -> pd.DataFrame:
         if page >= meta.get("last_page", page):
             break
         page += 1
-    return pd.DataFrame(
-        [{"id": c["id"], "name": c["name"], "status": c.get("status")} for c in rows],
-        columns=["id", "name", "status"],
+    df = pd.DataFrame(
+        [{"id": c["id"], "name": c["name"], "status": c.get("status"),
+          "created_at": c.get("created_at")} for c in rows],
+        columns=["id", "name", "status", "created_at"],
     )
+    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce")
+    return df
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -373,7 +388,8 @@ if campaigns.empty:
     st.stop()
 
 # Filters: one row above the charts.
-col_campaigns, col_dates, col_refresh = st.columns([3, 2, 1], vertical_alignment="bottom")
+today = date.today()
+col_campaigns, col_range, col_refresh = st.columns([3, 2, 1], vertical_alignment="bottom")
 with col_campaigns:
     selected = st.multiselect(
         "Campaigns",
@@ -381,21 +397,42 @@ with col_campaigns:
         placeholder="All campaigns",
         help="Leave empty to include every campaign.",
     )
-with col_dates:
-    today = date.today()
-    date_range = st.date_input(
-        "Date range", value=(today - timedelta(days=30), today), max_value=today
+with col_range:
+    quick_range = st.selectbox(
+        "Quick range", options=list(QUICK_RANGES),
+        index=list(QUICK_RANGES).index(DEFAULT_QUICK_RANGE),
     )
 with col_refresh:
     if st.button("Refresh data", type="primary", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
-# The date picker returns a 1-tuple while the user is mid-selection.
-if not isinstance(date_range, tuple) or len(date_range) != 2:
-    st.info("Pick an end date to load stats.")
-    st.stop()
-start_date, end_date = date_range
+if quick_range == "Custom":
+    # Two separate pickers, shown only for Custom, under the Quick range dropdown.
+    st.session_state.setdefault("custom_start", today - timedelta(days=29))
+    st.session_state.setdefault("custom_end", today)
+    _, col_custom, _ = st.columns([3, 2, 1])
+    with col_custom:
+        col_start, col_end = st.columns(2)
+        with col_start:
+            start_date = st.date_input("Start date", key="custom_start", max_value=today)
+        # Keep the end date on or after the start date if the start moves past it.
+        if st.session_state["custom_end"] < start_date:
+            st.session_state["custom_end"] = start_date
+        with col_end:
+            end_date = st.date_input(
+                "End date", key="custom_end", min_value=start_date, max_value=today
+            )
+elif quick_range == "All time":
+    earliest = campaigns["created_at"].min()
+    start_date = (
+        earliest.date() if pd.notna(earliest) else today - timedelta(days=ALL_TIME_FALLBACK_DAYS)
+    )
+    end_date = today
+else:
+    start_date, end_date = today - timedelta(days=QUICK_RANGES[quick_range] - 1), today
+
+st.caption(f"Showing {start_date:%b %d, %Y} – {end_date:%b %d, %Y}")
 
 filtered = campaigns[campaigns["name"].isin(selected)] if selected else campaigns
 

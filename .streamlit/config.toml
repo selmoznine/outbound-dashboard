@@ -1,14 +1,17 @@
-# Orcus GTM brand theme
+# Orcus GTM brand theme (orcusgtm.com)
 [theme]
-base = "dark"
+base = "light"
 primaryColor = "#875AF2"
-backgroundColor = "#000000"
-secondaryBackgroundColor = "#111111"
-textColor = "#FFFFFF"
-borderColor = "#262626"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F5F7"
+textColor = "#000000"
+borderColor = "#E5E7EB"
 baseRadius = "12px"
-font = "sans-serif"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFontWeights = 700
 
 [client]
-toolbarMode = "viewer"
+# Hide the toolbar/menu, and never show tracebacks or exception details to viewers.
+toolbarMode = "minimal"
+showErrorDetails = "none"
 showSidebarNavigation = false

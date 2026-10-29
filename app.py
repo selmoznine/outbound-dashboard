@@ -5,8 +5,10 @@ Secrets (in .streamlit/secrets.toml locally, or the Streamlit Cloud secrets UI):
     EMAILBISON_BASE_URL - optional; your instance URL (defaults to dedi.emailbison.com)
 """
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
@@ -16,6 +18,9 @@ import streamlit as st
 DEFAULT_BASE_URL = "https://dedi.emailbison.com"
 CACHE_TTL_SECONDS = 300
 STATS_WORKERS = 5
+CAMPAIGN_IDS_PER_REQUEST = 50  # keeps daily-stats query strings a sane length
+
+log = logging.getLogger("outbound_dashboard")
 
 # Health thresholds and suggested fixes.
 MAX_BOUNCE_RATE = 0.05
@@ -29,29 +34,69 @@ RECENT_LEADS_LIMIT = 25
 
 # Brand palette (orcusgtm.com).
 ACCENT = "#875AF2"
-TEXT = "#FFFFFF"
-TEXT_MUTED = "#9CA3AF"
-GRID = "#1F1F1F"
+TEXT = "#000000"
+TEXT_MUTED = "#6B7280"
+CARD_BG = "#F5F5F7"
+BORDER = "#E5E7EB"
+FONT = "Inter, system-ui, -apple-system, sans-serif"
 
-st.set_page_config(page_title="Outbound Performance", page_icon="📬", layout="wide")
+st.set_page_config(
+    page_title="Outbound Performance | Orcus",
+    page_icon=str(Path(__file__).parent / "assets" / "favicon.png"),
+    layout="wide",
+)
 
 st.markdown(
     f"""
     <style>
-    #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] {{
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    /* Hide all Streamlit chrome: header bar, toolbar, menu, deploy button,
+       running indicator, decoration strip, footer and hosting badges. */
+    header, header[data-testid="stHeader"], footer, #MainMenu,
+    [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"],
+    [data-testid="stAppDeployButton"], [class*="viewerBadge"] {{
         display: none !important;
     }}
-    header[data-testid="stHeader"] {{ background: transparent; }}
+
+    .stApp {{ font-family: {FONT}; }}
+    h1, h2, h3 {{ font-family: {FONT}; font-weight: 700 !important; color: {TEXT}; }}
+    [data-testid="stMainBlockContainer"], .block-container {{ padding-top: 2rem; }}
     [data-testid="stCaptionContainer"], .stCaption {{ color: {TEXT_MUTED}; }}
+
+    /* Header: pill badge (same style as orcusgtm.com's hero badge), title, subtitle. */
+    .pill {{
+        display: inline-block;
+        padding: 8px 16px;
+        border-radius: 9999px;
+        background: rgba(135, 90, 242, 0.1);
+        border: 1px solid rgba(135, 90, 242, 0.2);
+        color: {ACCENT};
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.25;
+    }}
+    .dash-title {{
+        font-family: {FONT};
+        font-size: 36px;
+        font-weight: 700;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+        color: {TEXT};
+        margin: 14px 0 4px;
+    }}
+    .subtitle {{ color: {TEXT_MUTED}; font-size: 16px; margin: 0 0 8px; }}
+
+    /* KPI cards. */
     [data-testid="stMetric"] {{
-        background: #0A0A0A;
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: {CARD_BG};
+        border: 1px solid {BORDER};
         border-radius: 16px;
         padding: 18px 20px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
     }}
-    [data-testid="stMetricLabel"] p {{ color: {TEXT_MUTED}; }}
-    [data-testid="stMetricValue"] {{ color: {ACCENT}; }}
-    .subtitle {{ color: {TEXT_MUTED}; font-size: 1.05rem; margin-top: -0.75rem; }}
+    [data-testid="stMetricLabel"] p {{ color: {TEXT_MUTED}; font-weight: 500; }}
+    [data-testid="stMetricValue"] {{ color: {ACCENT}; font-weight: 700; }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -65,10 +110,9 @@ def get_config() -> tuple[str, str]:
     try:
         api_key = st.secrets["EMAILBISON_API_KEY"]
     except (KeyError, FileNotFoundError):
-        st.error(
-            "Missing `EMAILBISON_API_KEY`. Add it to `.streamlit/secrets.toml` "
-            "(see `.streamlit/secrets.toml.example`) or to your app's secrets settings."
-        )
+        log.error("EMAILBISON_API_KEY is missing from Streamlit secrets "
+                  "(see .streamlit/secrets.toml.example).")
+        st.info("This dashboard isn't connected to EmailBison yet.")
         st.stop()
     base_url = st.secrets.get("EMAILBISON_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
     return api_key, base_url
@@ -136,14 +180,8 @@ def fetch_all_stats(api_key, base_url, campaigns: pd.DataFrame, start, end) -> p
     return pd.DataFrame(results)
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_daily_events(
-    api_key: str, base_url: str, campaign_ids: tuple[int, ...], start: date, end: date
-) -> pd.DataFrame:
-    """GET /api/campaign-events/stats: per-day event counts. No campaign_ids = all campaigns."""
-    params = [("start_date", start.isoformat()), ("end_date", end.isoformat())]
-    params += [("campaign_ids[]", cid) for cid in campaign_ids]
-    payload = api_request("GET", "/api/campaign-events/stats", api_key, base_url, params=params)
+def parse_daily_series(payload: dict) -> pd.DataFrame:
+    """Flatten [{label, dates: [[YYYY-MM-DD, count], ...]}, ...] into date/event/count rows."""
     rows = [
         {"date": day, "event": series["label"], "count": int(float(count or 0))}
         for series in payload.get("data", [])
@@ -152,6 +190,64 @@ def fetch_daily_events(
     df = pd.DataFrame(rows, columns=["date", "event", "count"])
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+def sum_daily(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    if not frames:
+        return pd.DataFrame(columns=["date", "event", "count"])
+    df = pd.concat(frames, ignore_index=True)
+    return df.groupby(["date", "event"], as_index=False)["count"].sum()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_daily_events(
+    api_key: str, base_url: str, campaign_ids: tuple[int, ...], start: date, end: date
+) -> pd.DataFrame:
+    """GET /api/campaign-events/stats with YYYY-MM-DD dates and campaign_ids[]=… per the docs.
+
+    campaign_ids is always sent (the endpoint drills down by campaign and/or sender), in
+    batches so the query string stays short; batch results are summed per day.
+    """
+    frames = []
+    for i in range(0, len(campaign_ids), CAMPAIGN_IDS_PER_REQUEST):
+        params = [("start_date", start.isoformat()), ("end_date", end.isoformat())]
+        params += [("campaign_ids[]", cid) for cid in campaign_ids[i:i + CAMPAIGN_IDS_PER_REQUEST]]
+        frames.append(parse_daily_series(
+            api_request("GET", "/api/campaign-events/stats", api_key, base_url, params=params)
+        ))
+    return sum_daily(frames)
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_campaign_daily(
+    api_key: str, base_url: str, campaign_id: int, start: date, end: date
+) -> pd.DataFrame:
+    """GET /api/campaigns/{id}/line-area-chart-stats: per-day event counts for one campaign."""
+    params = {"start_date": start.isoformat(), "end_date": end.isoformat()}
+    return parse_daily_series(api_request(
+        "GET", f"/api/campaigns/{campaign_id}/line-area-chart-stats", api_key, base_url,
+        params=params,
+    ))
+
+
+def load_daily(api_key, base_url, campaign_ids: tuple[int, ...], start, end) -> pd.DataFrame | None:
+    """Daily events from campaign-events/stats, falling back to per-campaign chart stats.
+
+    Returns None if both fail, so the caller can hide the section.
+    """
+    try:
+        return fetch_daily_events(api_key, base_url, campaign_ids, start, end)
+    except requests.RequestException as err:
+        log_api_error(err, "GET /api/campaign-events/stats")
+    try:
+        with ThreadPoolExecutor(max_workers=STATS_WORKERS) as pool:
+            frames = list(pool.map(
+                lambda cid: fetch_campaign_daily(api_key, base_url, cid, start, end), campaign_ids
+            ))
+        return sum_daily(frames)
+    except requests.RequestException as err:
+        log_api_error(err, "GET /api/campaigns/{id}/line-area-chart-stats")
+    return None
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -228,35 +324,48 @@ def health(row) -> tuple[str, str]:
 
 def style_chart(chart: alt.Chart) -> alt.Chart:
     return (
-        chart.configure(background="transparent")
+        chart.configure(background="transparent", font="Inter")
         .configure_view(strokeWidth=0)
         .configure_axis(
-            labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, gridColor=GRID,
-            domainColor=GRID, tickColor=GRID, labelFontSize=12,
+            labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, gridColor=BORDER,
+            domainColor=BORDER, tickColor=BORDER, labelFontSize=12,
         )
-        .configure_title(color=TEXT, anchor="start", fontSize=14, fontWeight=500)
+        .configure_title(color=TEXT, anchor="start", fontSize=14, fontWeight=600)
     )
 
 
-def show_api_error(err: requests.RequestException, what: str):
-    if isinstance(err, requests.HTTPError):
-        st.error(f"EmailBison returned {err.response.status_code} when {what}.")
+def log_api_error(err: requests.RequestException, what: str):
+    """Log full API error details for the app owner (server logs only, never the page)."""
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        log.warning("EmailBison %s failed: HTTP %s %s", what, resp.status_code, resp.text[:500])
     else:
-        st.error(f"Could not reach EmailBison when {what}: {err}")
+        log.warning("EmailBison %s failed: %r", what, err)
+
+
+UNAVAILABLE = "We couldn't load data from EmailBison right now. Please try again in a few minutes."
 
 
 # --- Page --------------------------------------------------------------------
 
 api_key, base_url = get_config()
 
-st.title("Outbound Performance")
-st.markdown('<p class="subtitle">Slipstream Engineering</p>', unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="hero">
+      <span class="pill">Live from EmailBison</span>
+      <div class="dash-title" role="heading" aria-level="1">Outbound Performance</div>
+      <p class="subtitle">Slipstream Engineering</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 try:
     campaigns = fetch_campaigns(api_key, base_url)
 except requests.RequestException as err:
-    show_api_error(err, "listing campaigns")
-    st.caption("Check the API key and base URL.")
+    log_api_error(err, "GET /api/campaigns")
+    st.info(UNAVAILABLE)
     st.stop()
 
 if campaigns.empty:
@@ -300,7 +409,8 @@ try:
         stats_this_week = fetch_all_stats(api_key, base_url, filtered, *this_week)
         stats_last_week = fetch_all_stats(api_key, base_url, filtered, *last_week)
 except requests.RequestException as err:
-    show_api_error(err, "loading campaign stats")
+    log_api_error(err, "POST /api/campaigns/{id}/stats")
+    st.info(UNAVAILABLE)
     st.stop()
 
 stats["reply_rate"] = [rate(r, c) for r, c in zip(stats["replies"], stats["leads_contacted"])]
@@ -343,18 +453,15 @@ st.caption("Arrows show week-over-week change: last 7 days vs the 7 days before.
 
 # Daily trend. Sent is ~100x replies, so each event gets its own panel and y-scale
 # instead of sharing one axis (which would flatten replies and interested to zero).
-st.subheader("Daily trend")
-try:
-    campaign_ids = tuple(int(i) for i in filtered["id"]) if selected else ()
-    daily = fetch_daily_events(api_key, base_url, campaign_ids, start_date, end_date)
-except requests.RequestException as err:
-    show_api_error(err, "loading daily stats")
-    daily = pd.DataFrame(columns=["date", "event", "count"])
-
-trend_cols = st.columns(3)
-for col, (event, title) in zip(
-    trend_cols, [("Sent", "Emails sent"), ("Replied", "Replies"), ("Interested", "Interested leads")]
-):
+# If EmailBison can't serve daily stats, the whole section is hidden.
+daily = load_daily(
+    api_key, base_url, tuple(int(i) for i in filtered["id"]), start_date, end_date
+)
+trend_events = [("Sent", "Emails sent"), ("Replied", "Replies"), ("Interested", "Interested leads")]
+show_trend = daily is not None and daily["event"].isin([e for e, _ in trend_events]).any()
+if show_trend:
+    st.subheader("Daily trend")
+for col, (event, title) in zip(st.columns(3) if show_trend else [], trend_events):
     series = daily[daily["event"] == event]
     with col:
         if series.empty:
@@ -442,14 +549,13 @@ st.download_button(
     type="primary",
 )
 
-# Recent interested leads, from replies marked Interested.
-st.subheader("Recent interested leads")
+# Recent interested leads, from replies marked Interested. Hidden if EmailBison fails.
 try:
     interested = fetch_interested_replies(api_key, base_url, start_date)
 except requests.RequestException as err:
-    show_api_error(err, "loading interested replies")
-    interested = pd.DataFrame(columns=["lead_id", "name", "company", "campaign_id", "reply_date"])
-    interested["reply_date"] = pd.to_datetime(interested["reply_date"], utc=True)
+    log_api_error(err, "GET /api/replies")
+    st.stop()
+st.subheader("Recent interested leads")
 
 campaign_names = dict(zip(campaigns["id"], campaigns["name"]))
 interested = interested[

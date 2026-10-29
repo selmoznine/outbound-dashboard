@@ -9,7 +9,11 @@ Streamlit dashboard showing live campaign stats from the EmailBison API:
 - Recent interested leads
 - Campaign filter and date range
 
-Styled with the Orcus GTM brand theme (`.streamlit/config.toml`).
+Styled with the Orcus GTM brand (light theme, Inter, purple `#875AF2` accent) via
+`.streamlit/config.toml` and CSS in `app.py`. Streamlit's toolbar, menu, header and footer are hidden.
+
+API errors are never shown on the page: viewers see a short "try again" message (or the section
+is hidden), and the full error goes to the app's server logs.
 
 ## Setup
 
@@ -38,5 +42,6 @@ Rates are calculated from summed counts across the selected campaigns over the s
 
 - `GET /api/campaigns`: campaign list
 - `POST /api/campaigns/{id}/stats`: per-campaign totals for a date range
-- `GET /api/campaign-events/stats`: daily sent / replied / interested
+- `GET /api/campaign-events/stats`: daily sent / replied / interested (falls back to
+  `GET /api/campaigns/{id}/line-area-chart-stats` per campaign)
 - `GET /api/replies?status=interested`: interested replies with lead name and company

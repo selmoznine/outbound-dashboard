@@ -1,0 +1,14 @@
+# Orcus GTM brand theme
+[theme]
+base = "dark"
+primaryColor = "#875AF2"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#111111"
+textColor = "#FFFFFF"
+borderColor = "#262626"
+baseRadius = "12px"
+font = "sans-serif"
+
+[client]
+toolbarMode = "viewer"
+showSidebarNavigation = false

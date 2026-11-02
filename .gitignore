@@ -6,3 +6,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Reply Intelligence classification cache (reply ID -> category)
+.cache/

@@ -8,14 +8,16 @@ Secrets (in .streamlit/secrets.toml locally, or the Streamlit Cloud secrets UI):
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
-from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
 
-DEFAULT_BASE_URL = "https://dedi.emailbison.com"
+from outbound import theme
+from outbound.emailbison import DEFAULT_BASE_URL, api_request, log_api_error
+from outbound.theme import ACCENT, TEXT_MUTED, style_chart
+
 CACHE_TTL_SECONDS = 300
 STATS_WORKERS = 5
 CAMPAIGN_IDS_PER_REQUEST = 50  # keeps daily-stats query strings a sane length
@@ -44,75 +46,7 @@ ALL_TIME_FALLBACK_DAYS = 365 * 5  # used if no campaign reports a created_at
 MAX_REPLY_PAGES = 20
 RECENT_LEADS_LIMIT = 25
 
-# Brand palette (orcusgtm.com).
-ACCENT = "#875AF2"
-TEXT = "#000000"
-TEXT_MUTED = "#6B7280"
-CARD_BG = "#F5F5F7"
-BORDER = "#E5E7EB"
-FONT = "Inter, system-ui, -apple-system, sans-serif"
-
-st.set_page_config(
-    page_title="Outbound Performance | Orcus",
-    page_icon=str(Path(__file__).parent / "assets" / "favicon.png"),
-    layout="wide",
-)
-
-st.markdown(
-    f"""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-    /* Hide all Streamlit chrome: header bar, toolbar, menu, deploy button,
-       running indicator, decoration strip, footer and hosting badges. */
-    header, header[data-testid="stHeader"], footer, #MainMenu,
-    [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"],
-    [data-testid="stAppDeployButton"], [class*="viewerBadge"] {{
-        display: none !important;
-    }}
-
-    .stApp {{ font-family: {FONT}; }}
-    h1, h2, h3 {{ font-family: {FONT}; font-weight: 700 !important; color: {TEXT}; }}
-    [data-testid="stMainBlockContainer"], .block-container {{ padding-top: 2rem; }}
-    [data-testid="stCaptionContainer"], .stCaption {{ color: {TEXT_MUTED}; }}
-
-    /* Header: pill badge (same style as orcusgtm.com's hero badge), title, subtitle. */
-    .pill {{
-        display: inline-block;
-        padding: 8px 16px;
-        border-radius: 9999px;
-        background: rgba(135, 90, 242, 0.1);
-        border: 1px solid rgba(135, 90, 242, 0.2);
-        color: {ACCENT};
-        font-size: 14px;
-        font-weight: 600;
-        line-height: 1.25;
-    }}
-    .dash-title {{
-        font-family: {FONT};
-        font-size: 36px;
-        font-weight: 700;
-        line-height: 1.15;
-        letter-spacing: -0.02em;
-        color: {TEXT};
-        margin: 14px 0 4px;
-    }}
-    .subtitle {{ color: {TEXT_MUTED}; font-size: 16px; margin: 0 0 8px; }}
-
-    /* KPI cards. */
-    [data-testid="stMetric"] {{
-        background: {CARD_BG};
-        border: 1px solid {BORDER};
-        border-radius: 16px;
-        padding: 18px 20px;
-        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
-    }}
-    [data-testid="stMetricLabel"] p {{ color: {TEXT_MUTED}; font-weight: 500; }}
-    [data-testid="stMetricValue"] {{ color: {ACCENT}; font-weight: 700; }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+theme.setup_page("Outbound Performance")
 
 
 # --- API client --------------------------------------------------------------
@@ -128,17 +62,6 @@ def get_config() -> tuple[str, str]:
         st.stop()
     base_url = st.secrets.get("EMAILBISON_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
     return api_key, base_url
-
-
-def api_request(method: str, path: str, api_key: str, base_url: str, **kwargs) -> dict:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    resp = requests.request(method, f"{base_url}{path}", headers=headers, timeout=30, **kwargs)
-    resp.raise_for_status()
-    return resp.json()
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Loading campaigns…")
@@ -337,27 +260,6 @@ def health(row) -> tuple[str, str]:
     return "⚠️ " + " + ".join(issues), " ".join(fixes)
 
 
-def style_chart(chart: alt.Chart) -> alt.Chart:
-    return (
-        chart.configure(background="transparent", font="Inter")
-        .configure_view(strokeWidth=0)
-        .configure_axis(
-            labelColor=TEXT_MUTED, titleColor=TEXT_MUTED, gridColor=BORDER,
-            domainColor=BORDER, tickColor=BORDER, labelFontSize=12,
-        )
-        .configure_title(color=TEXT, anchor="start", fontSize=14, fontWeight=600)
-    )
-
-
-def log_api_error(err: requests.RequestException, what: str):
-    """Log full API error details for the app owner (server logs only, never the page)."""
-    resp = getattr(err, "response", None)
-    if resp is not None:
-        log.warning("EmailBison %s failed: HTTP %s %s", what, resp.status_code, resp.text[:500])
-    else:
-        log.warning("EmailBison %s failed: %r", what, err)
-
-
 UNAVAILABLE = "We couldn't load data from EmailBison right now. Please try again in a few minutes."
 
 
@@ -365,16 +267,7 @@ UNAVAILABLE = "We couldn't load data from EmailBison right now. Please try again
 
 api_key, base_url = get_config()
 
-st.markdown(
-    """
-    <div class="hero">
-      <span class="pill">Live from EmailBison</span>
-      <div class="dash-title" role="heading" aria-level="1">Outbound Performance</div>
-      <p class="subtitle">Slipstream Engineering</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+theme.hero("Live from EmailBison", "Outbound Performance", "Slipstream Engineering")
 
 try:
     campaigns = fetch_campaigns(api_key, base_url)

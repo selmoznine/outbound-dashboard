@@ -54,6 +54,7 @@ turns on Reply Intelligence; `ANTHROPIC_MODEL` optionally overrides the Claude m
 - **Week-over-week**: the 7 days ending on the selected end date vs the 7 days before
 
 Rates are calculated from summed counts across the selected campaigns over the selected date range.
+All percentages are shown to two decimals (e.g. 0.03%).
 
 ## EmailBison endpoints used
 
@@ -79,9 +80,14 @@ How the page works:
 2. **Classification.** New replies go to Claude in batches of 20, using structured JSON
    output. Each reply is classified as one of `interested`, `not_now`, `wrong_person`,
    `objection`, `unsubscribe`, `out_of_office` or `other`, with a confidence, a one-line
-   reason, any referral name and any follow-up date. Results are saved after each batch to
-   `.cache/reply_classifications.json`, keyed by reply ID, so a reply is never classified
-   twice. API errors are logged and the affected replies are retried on the next refresh,
+   reason, any referral name and any follow-up date. Follow-up dates are worked out from the
+   day the reply arrived, so "reach out in Q1" in a June reply means the next January.
+   Results are saved after each batch to `.cache/reply_classifications.json`, keyed by reply
+   ID, so a reply is never classified twice. Each result records a version (a hash of the
+   prompt, schema and model), and changing any of these (or setting a different
+   `ANTHROPIC_MODEL`) reclassifies cached replies once on the next load. Old results stay
+   on screen until their replacements arrive. If you change how replies are prepared
+   without touching the prompt, bump `INPUT_REVISION` in `outbound/classifier.py`. API errors are logged and the affected replies are retried on the next refresh,
    so the page never crashes. On Streamlit Community Cloud this file lasts until the app
    reboots or redeploys, and after that replies are classified again once.
 3. **Analysis.**

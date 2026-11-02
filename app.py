@@ -16,7 +16,7 @@ import streamlit as st
 
 from outbound import theme
 from outbound.emailbison import DEFAULT_BASE_URL, api_request, log_api_error
-from outbound.theme import ACCENT, TEXT_MUTED, style_chart
+from outbound.theme import ACCENT, PCT, PCT_COLUMN, TEXT_MUTED, percent_columns, style_chart
 
 CACHE_TTL_SECONDS = 300
 STATS_WORKERS = 5
@@ -236,13 +236,13 @@ def totals(df: pd.DataFrame) -> dict:
 
 
 def pct_change(current: float, previous: float) -> str | None:
-    """Relative change for counts, e.g. '+12.5%'. None when there's no prior baseline."""
-    return f"{(current - previous) / previous:+.1%}" if previous else None
+    """Relative change for counts, e.g. '+12.50%'. None when there's no prior baseline."""
+    return f"{(current - previous) / previous:+{PCT}}" if previous else None
 
 
 def pts_change(current: float, previous: float) -> str:
-    """Change in percentage points for rates, e.g. '-0.4 pts'."""
-    return f"{(current - previous) * 100:+.1f} pts"
+    """Change in percentage points for rates, e.g. '-0.04 pts'."""
+    return f"{(current - previous) * 100:+.2f} pts"
 
 
 def health(row) -> tuple[str, str]:
@@ -366,12 +366,12 @@ k1.metric(
     delta=pct_change(cur["sent"], prev["sent"]), help=wow_help,
 )
 k2.metric(
-    "Reply rate", f"{kpi['reply_rate']:.1%}",
+    "Reply rate", f"{kpi['reply_rate']:{PCT}}",
     delta=pts_change(cur["reply_rate"], prev["reply_rate"]),
     help="Unique replying leads ÷ leads contacted. " + wow_help,
 )
 k3.metric(
-    "Positive reply rate", f"{kpi['positive_rate']:.1%}",
+    "Positive reply rate", f"{kpi['positive_rate']:{PCT}}",
     delta=pts_change(cur["positive_rate"], prev["positive_rate"]),
     help="Leads marked Interested ÷ leads contacted. " + wow_help,
 )
@@ -425,14 +425,14 @@ else:
         alt.Chart(chart_data)
         .mark_bar(color=ACCENT, cornerRadiusEnd=4)
         .encode(
-            x=alt.X("reply_rate:Q", title="Reply rate", axis=alt.Axis(format="%", tickCount=5)),
+            x=alt.X("reply_rate:Q", title="Reply rate", axis=alt.Axis(format=PCT, tickCount=5)),
             y=alt.Y("campaign:N", title=None, sort="-x", axis=alt.Axis(labelLimit=260)),
             tooltip=[
                 alt.Tooltip("campaign:N", title="Campaign"),
-                alt.Tooltip("reply_rate:Q", title="Reply rate", format=".1%"),
+                alt.Tooltip("reply_rate:Q", title="Reply rate", format=PCT),
                 alt.Tooltip("replies:Q", title="Replies", format=","),
                 alt.Tooltip("leads_contacted:Q", title="Leads contacted", format=","),
-                alt.Tooltip("positive_reply_rate:Q", title="Positive reply rate", format=".1%"),
+                alt.Tooltip("positive_reply_rate:Q", title="Positive reply rate", format=PCT),
             ],
         )
         .properties(height=max(160, 32 * len(chart_data)))
@@ -451,7 +451,7 @@ st.caption(
     f"or reply rate under {MIN_REPLY_RATE:.0%}."
 )
 st.dataframe(
-    table,
+    percent_columns(table, ["reply_rate", "positive_reply_rate", "bounce_rate"]),
     hide_index=True,
     width="stretch",
     column_config={
@@ -462,13 +462,13 @@ st.dataframe(
         "emails_sent": st.column_config.NumberColumn("Emails sent", format="%d"),
         "leads_contacted": st.column_config.NumberColumn("Leads contacted", format="%d"),
         "replies": st.column_config.NumberColumn("Replies", format="%d"),
-        "reply_rate": st.column_config.NumberColumn("Reply rate", format="percent"),
+        "reply_rate": st.column_config.NumberColumn("Reply rate", format=PCT_COLUMN),
         "interested": st.column_config.NumberColumn("Interested", format="%d"),
         "positive_reply_rate": st.column_config.NumberColumn(
-            "Positive reply rate", format="percent"
+            "Positive reply rate", format=PCT_COLUMN
         ),
         "bounced": st.column_config.NumberColumn("Bounced", format="%d"),
-        "bounce_rate": st.column_config.NumberColumn("Bounce rate", format="percent"),
+        "bounce_rate": st.column_config.NumberColumn("Bounce rate", format=PCT_COLUMN),
     },
 )
 st.download_button(

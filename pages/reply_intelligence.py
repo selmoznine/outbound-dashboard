@@ -118,10 +118,12 @@ if not anthropic_key:
 # --- Classification ----------------------------------------------------------
 
 classifier = get_classifier(anthropic_key, model)
-records = replies[["reply_id", "subject", "body", "title", "company"]].to_dict("records")
+records = replies[
+    ["reply_id", "subject", "body", "title", "company", "date_received"]
+].to_dict("records")
 
 try:
-    pending = sum(classifier.cache.classification(r["reply_id"]) is None for r in records)
+    pending = sum(classifier.needs_classification(r["reply_id"]) for r in records)
     progress = st.progress(0.0, text=f"Classifying {pending:,} new replies…") if pending else None
 
     def on_progress(done: int, total: int) -> None:
@@ -176,14 +178,14 @@ k1.metric("Total replies", f"{k['total_replies']:,}",
           help="Every inbox reply across all campaigns.")
 k2.metric(
     "Positive reply rate",
-    f"{k['positive_reply_rate']:.1%}" if k["positive_reply_rate"] is not None else "–",
+    f"{k['positive_reply_rate']:{theme.PCT}}" if k["positive_reply_rate"] is not None else "–",
     help=f"Leads with a reply classified Interested ({k['interested_leads']:,}) ÷ "
          f"leads contacted across all campaigns ({k['leads_contacted']:,}).",
 )
 k3.metric(
     "Most common category",
     analysis.CATEGORY_LABELS.get(k["top_category"], "–"),
-    help=(f"{k['top_category_share']:.0%} of classified replies."
+    help=(f"{k['top_category_share']:{theme.PCT}} of classified replies."
           if k["top_category_share"] is not None else None),
 )
 k4.metric("Referrals found", f"{k['referrals']:,}",
@@ -215,7 +217,7 @@ else:
             tooltip=[
                 alt.Tooltip("label:N", title="Category"),
                 alt.Tooltip("replies:Q", title="Replies", format=","),
-                alt.Tooltip("share:Q", title="Share", format=".1%"),
+                alt.Tooltip("share:Q", title="Share", format=theme.PCT),
             ],
         )
         .properties(height=max(160, 34 * len(breakdown)))
@@ -241,7 +243,9 @@ if enough:
                 if rows["leads_contacted"].isna().all():
                     rows = rows.drop(columns=["leads_contacted", "positive_reply_rate"])
                 st.dataframe(
-                    rows, hide_index=True, width="stretch",
+                    theme.percent_columns(
+                        rows, ["positive_reply_rate", "positive_share_of_replies"]),
+                    hide_index=True, width="stretch",
                     column_config={
                         "group": st.column_config.TextColumn(dimension, width="large"),
                         "replies": st.column_config.NumberColumn("Replies", format="%d"),
@@ -249,9 +253,9 @@ if enough:
                         "interested_leads": st.column_config.NumberColumn("Interested", format="%d"),
                         "leads_contacted": st.column_config.NumberColumn("Leads contacted", format="%d"),
                         "positive_reply_rate": st.column_config.NumberColumn(
-                            "Positive reply rate", format="percent"),
+                            "Positive reply rate", format=theme.PCT_COLUMN),
                         "positive_share_of_replies": st.column_config.NumberColumn(
-                            "Positive share of replies", format="percent"),
+                            "Positive share of replies", format=theme.PCT_COLUMN),
                     },
                 )
 

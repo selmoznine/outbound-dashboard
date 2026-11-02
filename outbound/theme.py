@@ -60,6 +60,24 @@ def card(html: str) -> None:
     st.markdown(f'<div class="card">{html}</div>', unsafe_allow_html=True)
 
 
+# Every percentage in the app is shown to two decimals (e.g. 0.03%).
+PCT = ".2%"                # Python f-strings and Altair/d3 formats
+PCT_COLUMN = "%.2f%%"      # st.column_config.NumberColumn, on values already x100
+
+
+def percent_columns(df, columns):
+    """Copy of `df` with fractional rate columns scaled to 0-100 for `PCT_COLUMN`.
+
+    st.column_config's built-in "percent" format drops trailing zeros (9.3% vs 9.30%),
+    so tables scale the values and use a fixed two-decimal format instead.
+    """
+    out = df.copy()
+    for col in columns:
+        if col in out:
+            out[col] = out[col].astype("Float64") * 100
+    return out
+
+
 def style_chart(chart: alt.Chart) -> alt.Chart:
     """Apply the brand's Altair styling (transparent background, Inter, muted axes)."""
     return (

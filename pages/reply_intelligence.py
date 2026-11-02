@@ -10,15 +10,23 @@ Secrets:
     ANTHROPIC_MODEL                          - optional; defaults to the latest Sonnet
 """
 
+import hashlib
 import html
 import logging
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import requests
 import streamlit as st
 
+from outbound.reloader import load_fresh
+
+# Reload any outbound module whose file changed since it was loaded (e.g. after a deploy).
+load_fresh("outbound.theme", "outbound.emailbison", "outbound.classifier", "outbound.analysis")
+
 from outbound import analysis, theme
+from outbound import classifier as classifier_module
 from outbound.classifier import DEFAULT_MODEL, ClassifierAuthError, ReplyClassifier
 from outbound.emailbison import DEFAULT_BASE_URL, load_reply_dataset, log_api_error
 
@@ -60,9 +68,19 @@ def load_data(api_key: str, base_url: str) -> dict[str, pd.DataFrame]:
     return load_reply_dataset(api_key, base_url)
 
 
-@st.cache_resource
-def get_classifier(api_key: str, model_id: str) -> ReplyClassifier:
+# Fingerprint of the classifier's code. st.cache_resource keeps objects for the life of the
+# server, so without this a redeploy would keep serving an instance of the old class.
+CLASSIFIER_CODE = hashlib.sha256(Path(classifier_module.__file__).read_bytes()).hexdigest()[:12]
+
+
+@st.cache_resource(max_entries=1)
+def _classifier(api_key: str, model_id: str, code_version: str) -> ReplyClassifier:
     return ReplyClassifier(api_key, model_id)
+
+
+def get_classifier(api_key: str, model_id: str) -> ReplyClassifier:
+    """One shared classifier per key, model and version of the classifier code."""
+    return _classifier(api_key, model_id, CLASSIFIER_CODE)
 
 
 class _NoSummary(Exception):

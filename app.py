@@ -14,6 +14,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from outbound.reloader import load_fresh
+
+# Reload any outbound module whose file changed since it was loaded (e.g. after a deploy).
+load_fresh("outbound.theme", "outbound.emailbison")
+
 from outbound import theme
 from outbound.emailbison import DEFAULT_BASE_URL, api_request, log_api_error
 from outbound.theme import ACCENT, PCT, PCT_COLUMN, TEXT_MUTED, percent_columns, style_chart

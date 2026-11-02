@@ -354,6 +354,10 @@ class ReplyClassifier:
         except anthropic.APIConnectionError as err:
             _record(stats, f"Could not reach the Anthropic API: {err}")
             return None
+        except Exception as err:  # never let an unexpected SDK error take the page down
+            log.exception("Unexpected error calling the Anthropic API")
+            _record(stats, f"Unexpected error calling the Anthropic API: {err!r}")
+            return None
 
         problem = None
         if response.stop_reason in ("refusal", "max_tokens"):
@@ -499,12 +503,16 @@ def _run_parallel(fn: Callable[[list[dict]], None], batches: list[list[dict]]):
     """Run batches on a small thread pool, yielding each batch as it finishes.
 
     Yields on the caller's thread, so Streamlit progress widgets can be updated safely.
+    The first batch runs on its own, so the SDK finishes its one-time setup before several
+    threads use it at once (and a bad key fails fast, before any other batch is sent).
     A ClassifierAuthError from any batch cancels the queued ones and is re-raised.
     """
     if not batches:
         return
+    fn(batches[0])
+    yield batches[0]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {pool.submit(fn, b): b for b in batches}
+        futures = {pool.submit(fn, b): b for b in batches[1:]}
         try:
             for future in as_completed(futures):
                 future.result()

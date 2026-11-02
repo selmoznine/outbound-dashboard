@@ -5,17 +5,22 @@ Each reply is classified into exactly one category:
     interested, not_now, wrong_person, objection, unsubscribe, out_of_office, other
 
 with a confidence (0-1), a one-line reason, the name of anyone the lead refers us to, and a
-follow-up date when the lead asks to be contacted later ("reach out in Q1" -> 2027-01-01).
+follow-up date when the lead asks to be contacted later. Relative dates are resolved from
+the day the reply arrived, not the day it was classified: "reach out in Q1" sent in
+June 2026 means 2027-01-01.
 
 Replies are sent in batches using structured JSON output (`output_config.format`), so the
 response always parses. Results are written to a local JSON cache keyed by reply ID after
 every batch, so the same reply is never classified twice, and a crash or API outage only
-costs the batch in flight. API errors are logged and counted, never raised to the page,
+costs the batch in flight. Each result is stamped with a version (a hash of the prompt,
+schema, model and input format); when any of those change, cached results from the old
+version are reclassified on the next run, and kept on screen until their replacement lands. API errors are logged and counted, never raised to the page,
 except a bad API key (`ClassifierAuthError`), which the page shows as a setup message.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -82,7 +87,9 @@ Fields:
 - referral_name: the person they point us to (name, plus email or role if given), else "".
 - follow_up_date: if they say when to reach out again, the earliest date that matches it as
   YYYY-MM-DD ("Q1" -> first day of the next Q1, "after the summer" -> September 1, an
-  out-of-office return date -> that date), else "". Today is {today}.
+  out-of-office return date -> that date), else "". Work this out from the reply's
+  received_on date, not from today: "next quarter" in a reply received 2026-05-10 means
+  2026-07-01.
 
 Return one result per reply, using the reply_id you were given."""
 
@@ -141,7 +148,8 @@ _RESPONSE_SCHEMA = {
 _SUMMARY_SYSTEM = """You are a GTM analyst reviewing cold outbound performance. You get an
 aggregated table of reply outcomes by campaign, sequence step/variant, title seniority and
 industry. Write exactly 3 takeaways, each one sentence, action-first ("Double down on X…",
-"Cut Y…", "Rewrite Z…"), each citing the numbers behind it. Only use what is in the table;
+"Cut Y…", "Rewrite Z…"), each citing the numbers behind it, with percentages written to
+two decimals (e.g. 0.83%; the table's rates are fractions). Only use what is in the table;
 if the sample is small, say so in the takeaway."""
 
 _SUMMARY_SCHEMA = {
@@ -150,6 +158,19 @@ _SUMMARY_SCHEMA = {
     "required": ["takeaways"],
     "additionalProperties": False,
 }
+
+
+# Bump when the classifier's input changes in a way the prompt text doesn't show
+# (e.g. clean_reply_text or the payload fields), to force reclassification.
+INPUT_REVISION = 2
+
+
+def classifier_version(model: str) -> str:
+    """Short hash of everything that shapes a classification: prompt, schema, model, input."""
+    blob = json.dumps(
+        [_CLASSIFY_SYSTEM, _CLASSIFY_SCHEMA, model, INPUT_REVISION], sort_keys=True
+    )
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
 class ReplyClassifier:
@@ -164,7 +185,13 @@ class ReplyClassifier:
     def __init__(self, api_key: str, model: str = DEFAULT_MODEL, cache_path: Path = DEFAULT_CACHE_PATH):
         self.client = anthropic.Anthropic(api_key=api_key, max_retries=3, timeout=120.0)
         self.model = model
+        self.version = classifier_version(model)
         self.cache = ClassificationCache(cache_path)
+
+    def needs_classification(self, reply_id) -> bool:
+        """True if the reply has no cached result, or one from an older classifier version."""
+        cached = self.cache.classification(reply_id)
+        return cached is None or cached.get("version") != self.version
 
     # --- Classification -----------------------------------------------------
 
@@ -173,11 +200,14 @@ class ReplyClassifier:
     ) -> tuple[dict[str, dict], RunStats]:
         """Classify replies not already in the cache; return all results by reply ID.
 
-        Each reply dict needs `reply_id`, `body`, and optionally `subject`, `title`, `company`.
+        Each reply dict needs `reply_id`, `body`, and optionally `subject`, `title`, `company`
+        and `date_received` (used to resolve "reach out in Q1" style follow-up dates).
+        Replies cached under an older classifier version are reclassified; if that fails,
+        their old result is still returned so the page doesn't lose data.
         `on_progress(done, total)` is called after each batch of new classifications.
         """
         stats = RunStats(requested=len(replies))
-        todo = [r for r in replies if self.cache.classification(r["reply_id"]) is None]
+        todo = [r for r in replies if self.needs_classification(r["reply_id"])]
         stats.from_cache = stats.requested - len(todo)
         batches = [todo[i:i + BATCH_SIZE] for i in range(0, len(todo), BATCH_SIZE)]
         lock = threading.Lock()
@@ -204,11 +234,12 @@ class ReplyClassifier:
             "subject": (r.get("subject") or "")[:200],
             "lead_title": r.get("title") or "",
             "lead_company": r.get("company") or "",
+            "received_on": _received_on(r.get("date_received")),
             "reply": clean_reply_text(r.get("body") or ""),
         } for r in batch]
         try:
             data = self._call(
-                system=_CLASSIFY_SYSTEM.replace("{today}", date.today().isoformat()),
+                system=_CLASSIFY_SYSTEM,
                 user="Classify these replies:\n" + json.dumps(payload, ensure_ascii=False),
                 schema=_CLASSIFY_SCHEMA,
                 max_tokens=8000,
@@ -228,7 +259,7 @@ class ReplyClassifier:
         for item in data.get("results", []):
             rid = str(item.get("reply_id"))
             if rid in wanted:
-                out[rid] = _normalise(item, self.model)
+                out[rid] = _normalise(item, self.model, self.version)
         return out
 
     # --- Objection responses -----------------------------------------------
@@ -417,7 +448,27 @@ def clean_reply_text(text: str) -> str:
     return text[:MAX_BODY_CHARS]
 
 
-def _normalise(item: dict, model: str) -> dict:
+def _received_on(value) -> str:
+    """The reply's received date as YYYY-MM-DD, falling back to today if unknown."""
+    try:
+        parsed = _to_date(value)
+    except (TypeError, ValueError):
+        parsed = None
+    return (parsed or date.today()).isoformat()
+
+
+def _to_date(value) -> date | None:
+    """Parse an ISO timestamp, a datetime/Timestamp or a date into a date (None if blank)."""
+    if value is None or value == "" or (isinstance(value, float) and value != value):
+        return None
+    if hasattr(value, "date") and callable(value.date):
+        return None if str(value) == "NaT" else value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _normalise(item: dict, model: str, version: str) -> dict:
     category = item.get("category")
     try:
         confidence = min(max(float(item.get("confidence", 0)), 0.0), 1.0)
@@ -433,6 +484,7 @@ def _normalise(item: dict, model: str) -> dict:
         "referral_name": (item.get("referral_name") or "").strip(),
         "follow_up_date": follow_up,
         "model": model,
+        "version": version,
         "classified_on": date.today().isoformat(),
     }
 

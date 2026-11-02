@@ -176,7 +176,7 @@ k1.metric("Total replies", f"{k['total_replies']:,}",
           help="Every inbox reply across all campaigns.")
 k2.metric(
     "Positive reply rate",
-    f"{k['positive_reply_rate']:.1%}" if k["positive_reply_rate"] is not None else "–",
+    f"{k['positive_reply_rate']:.2%}" if k["positive_reply_rate"] is not None else "–",
     help=f"Leads with a reply classified Interested ({k['interested_leads']:,}) ÷ "
          f"leads contacted across all campaigns ({k['leads_contacted']:,}).",
 )

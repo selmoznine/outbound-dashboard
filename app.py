@@ -240,9 +240,9 @@ def pct_change(current: float, previous: float) -> str | None:
     return f"{(current - previous) / previous:+.1%}" if previous else None
 
 
-def pts_change(current: float, previous: float) -> str:
+def pts_change(current: float, previous: float, decimals: int = 1) -> str:
     """Change in percentage points for rates, e.g. '-0.4 pts'."""
-    return f"{(current - previous) * 100:+.1f} pts"
+    return f"{(current - previous) * 100:+.{decimals}f} pts"
 
 
 def health(row) -> tuple[str, str]:
@@ -371,8 +371,8 @@ k2.metric(
     help="Unique replying leads ÷ leads contacted. " + wow_help,
 )
 k3.metric(
-    "Positive reply rate", f"{kpi['positive_rate']:.1%}",
-    delta=pts_change(cur["positive_rate"], prev["positive_rate"]),
+    "Positive reply rate", f"{kpi['positive_rate']:.2%}",
+    delta=pts_change(cur["positive_rate"], prev["positive_rate"], decimals=2),
     help="Leads marked Interested ÷ leads contacted. " + wow_help,
 )
 k4.metric(
@@ -432,7 +432,7 @@ else:
                 alt.Tooltip("reply_rate:Q", title="Reply rate", format=".1%"),
                 alt.Tooltip("replies:Q", title="Replies", format=","),
                 alt.Tooltip("leads_contacted:Q", title="Leads contacted", format=","),
-                alt.Tooltip("positive_reply_rate:Q", title="Positive reply rate", format=".1%"),
+                alt.Tooltip("positive_reply_rate:Q", title="Positive reply rate", format=".2%"),
             ],
         )
         .properties(height=max(160, 32 * len(chart_data)))

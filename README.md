@@ -43,6 +43,8 @@ turns on Reply Intelligence; `ANTHROPIC_MODEL` optionally overrides the Claude m
 - `outbound/emailbison.py`: EmailBison API client (auth, retries, full pagination) and the reply data pull
 - `outbound/classifier.py`: Claude classification, objection responses, AI summary and the on-disk cache
 - `outbound/analysis.py`: title seniority buckets, joins and aggregations for Reply Intelligence
+- `outbound/reloader.py`: reloads any `outbound` module whose file changed since it was loaded, so
+  a deploy never runs new page code against old modules still in memory
 
 ## Metric definitions
 
